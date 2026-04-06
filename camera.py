@@ -6,13 +6,10 @@ from tensorflow.keras.layers import Dense, Dropout, Flatten
 from tensorflow.keras.layers import Conv2D
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import MaxPooling2D
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from pandastable import Table, TableModel
-from tensorflow.keras.preprocessing import image
 import datetime
 from threading import Thread
-# from Spotipy import *  
 import time
+import platform
 import pandas as pd
 face_cascade=cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 ds_factor=0.6
@@ -36,10 +33,9 @@ emotion_model.load_weights('model.h5')
 cv2.ocl.setUseOpenCL(False)
 
 emotion_dict = {0:"Angry",1:"Disgusted",2:"Fearful",3:"Happy",4:"Neutral",5:"Sad",6:"Surprised"}
-music_dist={0:"songs/angry.csv",1:"songs/disgusted.csv ",2:"songs/fearful.csv",3:"songs/happy.csv",4:"songs/neutral.csv",5:"songs/sad.csv",6:"songs/surprised.csv"}
+music_dist={0:"songs/angry.csv",1:"songs/disgusted.csv",2:"songs/fearful.csv",3:"songs/happy.csv",4:"songs/neutral.csv",5:"songs/sad.csv",6:"songs/surprised.csv"}
 global last_frame1                                    
 last_frame1 = np.zeros((480, 640, 3), dtype=np.uint8)
-global cap1 
 show_text=[0]
 
 
@@ -71,73 +67,42 @@ class FPS:
 		return self._numFrames / self.elapsed()
 
 
-''' Class for using another thread for video streaming to boost performance '''
-class WebcamVideoStream:
-    	
-		def __init__(self, src=0):
-			self.stream = cv2.VideoCapture(src,cv2.CAP_DSHOW)
-			(self.grabbed, self.frame) = self.stream.read()
-			self.stopped = False
+import base64
+import io
 
-		def start(self):
-				# start the thread to read frames from the video stream
-			Thread(target=self.update, args=()).start()
-			return self
-			
-		def update(self):
-			# keep looping infinitely until the thread is stopped
-			while True:
-				# if the thread indicator variable is set, stop the thread
-				if self.stopped:
-					return
-				# otherwise, read the next frame from the stream
-				(self.grabbed, self.frame) = self.stream.read()
+''' Class for stateless emotion prediction from image data '''
+class EmotionPredictor(object):
+    def predict_emotion(self, image_data_base64):
+        # Decode base64 image
+        try:
+            if "," in image_data_base64:
+                image_data_base64 = image_data_base64.split(",")[1]
+            img_bytes = base64.b64decode(image_data_base64)
+            img_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+            image = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            print(f"Error decoding image: {e}")
+            return None
 
-		def read(self):
-			# return the frame most recently read
-			return self.frame
-		def stop(self):
-			# indicate that the thread should be stopped
-			self.stopped = True
+        if image is None:
+            return None
 
-''' Class for reading video stream, generating prediction and recommendations '''
-class VideoCamera(object):
-	
-	def get_frame(self):
-		global cap1
-		global df1
-		cap1 = WebcamVideoStream(src=0).start()
-		image = cap1.read()
-		image=cv2.resize(image,(600,500))
-		gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
-		face_rects=face_cascade.detectMultiScale(gray,1.3,5)
-		df1 = pd.read_csv(music_dist[show_text[0]])
-		df1 = df1[['Name','Album','Artist']]
-		df1 = df1.head(15)
-		for (x,y,w,h) in face_rects:
-			cv2.rectangle(image,(x,y-50),(x+w,y+h+10),(0,255,0),2)
-			roi_gray_frame = gray[y:y + h, x:x + w]
-			cropped_img = np.expand_dims(np.expand_dims(cv2.resize(roi_gray_frame, (48, 48)), -1), 0)
-			prediction = emotion_model.predict(cropped_img)
-
-			maxindex = int(np.argmax(prediction))
-			show_text[0] = maxindex 
-			#print("===========================================",music_dist[show_text[0]],"===========================================")
-			#print(df1)
-			cv2.putText(image, emotion_dict[maxindex], (x+20, y-60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-			df1 = music_rec()
-			
-		global last_frame1
-		last_frame1 = image.copy()
-		pic = cv2.cvtColor(last_frame1, cv2.COLOR_BGR2RGB)     
-		img = Image.fromarray(last_frame1)
-		img = np.array(img)
-		ret, jpeg = cv2.imencode('.jpg', img)
-		return jpeg.tobytes(), df1
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        face_rects = face_cascade.detectMultiScale(gray, 1.3, 5)
+        
+        maxindex = 4 # Default to Neutral
+        
+        for (x, y, w, h) in face_rects:
+            roi_gray_frame = gray[y:y + h, x:x + w]
+            cropped_img = np.expand_dims(np.expand_dims(cv2.resize(roi_gray_frame, (48, 48)), -1), 0)
+            prediction = emotion_model.predict(cropped_img)
+            maxindex = int(np.argmax(prediction))
+            break # Just take the first face for simplicity in serverless
+            
+        return maxindex
 
 def music_rec():
-	# print('---------------- Value ------------', music_dist[show_text[0]])
-	df = pd.read_csv(music_dist[show_text[0]])
-	df = df[['Name','Album','Artist']]
-	df = df.head(15)
-	return df
+    df = pd.read_csv(music_dist[show_text[0]])
+    df = df[['Name','Album','Artist']]
+    df = df.head(15)
+    return df
